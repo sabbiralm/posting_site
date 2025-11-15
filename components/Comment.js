@@ -1,0 +1,258 @@
+'use client';
+import Image from 'next/image';
+import { useState, useRef } from 'react';
+
+export default function Comment({ comment, currentUser, postId, onCommentUpdate, depth = 0 }) {
+  const commentRef = useRef(null);
+  
+  // Safe defaults for comment data
+  const safeLikes = comment?.likes || [];
+  const safeMentions = comment?.mentions || [];
+  const safeReplies = comment?.replies || [];
+  
+  const [isLiked, setIsLiked] = useState(safeLikes.includes(currentUser?.id));
+  const [likeCount, setLikeCount] = useState(safeLikes.length);
+  const [isReplying, setIsReplying] = useState(false);
+  const [replyContent, setReplyContent] = useState('');
+  const [isPosting, setIsPosting] = useState(false);
+  const [showReplies, setShowReplies] = useState(false);
+
+  // Flat replies after 3 levels (0, 1, 2 = nested, 3+ = flat)
+  const MAX_NESTED_DEPTH = 10;
+  const shouldFlattenReplies = depth >= MAX_NESTED_DEPTH;
+console.log("kjh",currentUser)
+  const handleLike = async () => {
+    const prevLiked = isLiked;
+    const prevCount = likeCount;
+
+    // Optimistic update
+    if (!isLiked) {
+      setIsLiked(true);
+      setLikeCount(likeCount + 1);
+    } else {
+      setIsLiked(false);
+      setLikeCount(likeCount - 1);
+    }
+
+    try {
+      const response = await fetch(`/api/comments/${comment._id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id }),
+      });
+
+      if (!response.ok) {
+        // Server failed → rollback
+        setIsLiked(prevLiked);
+        setLikeCount(prevCount);
+      } else {
+        // Update from server response
+        const updatedComment = await response.json();
+        const updatedLikes = updatedComment?.likes || [];
+        setIsLiked(updatedLikes.includes(currentUser?.id));
+        setLikeCount(updatedLikes.length);
+      }
+    } catch (error) {
+      console.error('Error liking comment:', error);
+      // Network error → rollback
+      setIsLiked(prevLiked);
+      setLikeCount(prevCount);
+    }
+  };
+
+  const handleReply = async (e) => {
+    e.preventDefault();
+    
+    if (!replyContent.trim() || isPosting) return;
+    
+    setIsPosting(true);
+
+    try {
+      const mentionRegex = /@(\w+)/g;
+      const mentions = [];
+      let match;
+      while ((match = mentionRegex.exec(replyContent)) !== null) {
+        mentions.push(match[1]);
+      }
+
+      const response = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: replyContent,
+          author: currentUser?.name || 'Anonymous',
+          authorId: currentUser?.id || 'anonymous',
+          postId: postId,
+          parentCommentId: comment._id,
+          mentions: mentions,
+          photoURL: currentUser?.photoURL || ''
+        }),
+      });
+
+      if (response.ok) {
+        setReplyContent('');
+        setIsReplying(false);
+        setShowReplies(true); // Show replies after posting
+        
+        onCommentUpdate(); // Refresh comments
+      } else {
+        console.error('Error posting reply. Server responded with:', response.status);
+      }
+    } catch (error) {
+      console.error('Error posting reply:', error);
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  // If comment is not available, don't render
+  if (!comment) {
+    return null;
+  }
+
+  return (
+    <div 
+  ref={commentRef}
+  className={`${depth > 0 ? 'mt-2' : 'mt-3'}`}
+  onClick={(e) => {
+    e.stopPropagation();   // 🔥 Prevent bubbling
+    console.log("Depth:", depth);
+  }}
+>
+
+      <div  className={depth >= 2 ? '' : 'flex items-start'}>
+        {/* Profile Picture */}
+        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+          <span className="text-blue-600 text-sm font-semibold">
+            {comment.photoURL ? (
+  <Image
+    src={comment.photoURL}
+    alt={comment.author}
+    height={40}
+    width={40}
+    className="rounded-full"
+  />
+) : (
+  <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center text-sm font-bold">
+    {comment.author?.charAt(0).toUpperCase() || 'U'}
+  </div>
+)}
+
+          </span>
+        </div>
+        
+        <div className="flex-1 mt-2">
+          {/* Comment Content */}
+          <div className="bg-gray-100 rounded-2xl px-3 py-2">
+            <div className="flex items-baseline space-x-2">
+              <h4 className="font-semibold text-sm text-gray-900">
+                {comment.author || 'Unknown User'}
+              </h4>
+              <span className="text-gray-500 text-xs">
+                {comment.createdAt ? new Date(comment.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Now'}
+              </span>
+            </div>
+            <p className="text-gray-800 mt-1 text-sm">
+              {comment.content}
+            </p>
+          </div>
+
+          {/* Comment Actions */}
+          <div className="flex items-center space-x-4 mt-1 text-xs text-gray-500 px-1">
+            <button
+              onClick={handleLike}
+              className={`hover:underline ${isLiked ? 'text-blue-600 font-semibold' : ''}`}
+            >
+              Like
+            </button>
+            
+            <button
+              type="button"
+              onClick={() => setIsReplying(!isReplying)}
+              className="hover:underline"
+              disabled={isPosting}
+            >
+              Reply
+            </button>
+            
+            {likeCount > 0 && (
+              <span className="text-gray-400">·</span>
+            )}
+            
+            {likeCount > 0 && (
+              <button className="flex items-center space-x-1 text-gray-500 hover:underline">
+                <span>👍</span>
+                <span>{likeCount}</span>
+              </button>
+            )}
+
+            {safeReplies.length > 0 && (
+              <>
+                <span className="text-gray-400">·</span>
+                <button 
+                  onClick={() => setShowReplies(!showReplies)}
+                  className="text-blue-600 hover:underline"
+                >
+                  {showReplies ? 'Hide' : 'View'} replies ({safeReplies.length})
+                </button>
+              </>
+            )}
+            
+            {isPosting && (
+              <span className="text-green-600 text-xs">
+                Posting...
+              </span>
+            )}
+          </div>
+
+          {/* Reply Form */}
+          {isReplying && (
+            <div className="mt-2 flex items-start space-x-2">
+              <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-gray-600 text-xs">
+                  {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                </span>
+              </div>
+              <form onSubmit={handleReply} className="flex-1 flex space-x-2">
+                <input
+                  type="text"
+                  value={replyContent}
+                  onChange={(e) => setReplyContent(e.target.value)}
+                  placeholder="Write a reply..."
+                  className="flex-1 border-b border-gray-300 px-1 py-1 text-sm focus:outline-none focus:border-blue-500 bg-transparent"
+                  disabled={isPosting}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
+                  disabled={isPosting || !replyContent.trim()}
+                >
+                  Reply
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Nested Replies */}
+          {showReplies && safeReplies.length > 0 && (
+            <div
+    className={`mt-2 space-y-2 ${depth >= 2 ? '' : 'border-l-2 border-gray-200 pl-3'}`}
+  >
+              {safeReplies.map((reply) => (
+                <Comment
+                  key={reply._id}
+                  comment={reply}
+                  currentUser={currentUser}
+                  postId={postId}
+                  onCommentUpdate={onCommentUpdate}
+                  depth={shouldFlattenReplies ? depth : depth + 1}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
