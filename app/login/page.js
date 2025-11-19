@@ -8,11 +8,12 @@ import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
   sendEmailVerification,
-  updateProfile
+  updateProfile,
+  onAuthStateChanged
 } from "firebase/auth";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,12 +25,27 @@ export default function LoginPage() {
   const [pendingUser, setPendingUser] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [showPhotoUpload, setShowPhotoUpload] = useState(false);
+  const [verifiedUser, setVerifiedUser] = useState(null);
   const [formData, setFormData] = useState({
     email: "",
     password: "",
     confirmPassword: "",
     displayName: ""
   });
+
+  // Check auth state to detect when user verifies email
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user && user.emailVerified && verifiedUser === null) {
+        // User just verified their email
+        setVerifiedUser(user);
+        setShowPhotoUpload(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [verifiedUser]);
 
   const handleInputChange = (e) => {
     setFormData({
@@ -65,25 +81,10 @@ export default function LoginPage() {
     }
   };
 
-  // Upload image to Firebase Storage
-  const uploadImage = async (userId) => {
-    if (!selectedImage) return null;
-
-    try {
-      // Create a reference to the storage location
-      const imageRef = ref(storage, `profile-photos/${userId}/${selectedImage.name}`);
-      
-      // Upload the file
-      const snapshot = await uploadBytes(imageRef, selectedImage);
-      
-      // Get download URL
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      
-      return downloadURL;
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      throw new Error('Failed to upload profile photo');
-    }
+  // Upload image to Cloudinary
+  const uploadImage = async (file) => {
+    if (!file) return null;
+    return await uploadToCloudinary(file);
   };
 
   // Remove selected image
@@ -92,6 +93,55 @@ export default function LoginPage() {
     setImagePreview(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  // Handle photo upload after verification
+  const handlePhotoUploadAfterVerification = async () => {
+    if (!verifiedUser) return;
+
+    try {
+      setLoading(true);
+      let photoURL = null;
+
+      // Upload profile photo if selected
+      if (selectedImage) {
+        photoURL = await uploadImage(selectedImage);
+        
+        // Update user profile with photo
+        await updateProfile(verifiedUser, {
+          photoURL: photoURL
+        });
+      }
+
+      // Create user record in database
+      await handleUserCreation(verifiedUser);
+      
+      alert("Profile setup complete! Redirecting to dashboard...");
+      router.push("/dashboard");
+      
+    } catch (error) {
+      console.error("Photo upload error:", error);
+      alert("Failed to upload profile photo. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Skip photo upload
+  const handleSkipPhotoUpload = async () => {
+    if (!verifiedUser) return;
+
+    try {
+      setLoading(true);
+      await handleUserCreation(verifiedUser);
+      alert("Welcome! Redirecting to dashboard...");
+      router.push("/dashboard");
+    } catch (error) {
+      console.error("User creation error:", error);
+      alert("Failed to complete setup. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -109,72 +159,46 @@ export default function LoginPage() {
     }
   };
 
-  // Email/Password Sign Up with Verification and Photo Upload
-  // Updated handleEmailSignUp function
-const handleEmailSignUp = async (e) => {
-  e.preventDefault();
-  
-  if (formData.password !== formData.confirmPassword) {
-    alert("Passwords don't match!");
-    return;
-  }
-
-  try {
-    setLoading(true);
+  // Email/Password Sign Up with Verification (without photo)
+  const handleEmailSignUp = async (e) => {
+    e.preventDefault();
     
-    // Create user with email and password
-    const result = await createUserWithEmailAndPassword(
-      auth, 
-      formData.email, 
-      formData.password
-    );
-
-    let photoURL = null;
-
-    // Upload profile photo to Cloudinary if selected
-    if (selectedImage) {
-      photoURL = await uploadToCloudinary(selectedImage);
+    if (formData.password !== formData.confirmPassword) {
+      alert("Passwords don't match!");
+      return;
     }
 
-    // Update profile with display name and photo
-    await updateProfile(result.user, {
-      displayName: formData.displayName,
-      photoURL: photoURL
-    });
+    try {
+      setLoading(true);
+      
+      // Create user with email and password
+      const result = await createUserWithEmailAndPassword(
+        auth, 
+        formData.email, 
+        formData.password
+      );
 
-    // Send email verification
-    await sendEmailVerification(result.user);
-    
-    setPendingUser(result.user);
-    setVerificationSent(true);
-    
-    alert("Verification email sent! Please check your inbox.");
-    
-  } catch (error) {
-    console.error("Sign up error:", error);
-    alert(getErrorMessage(error.code));
-  } finally {
-    setLoading(false);
-  }
-};
+      // Update profile with display name only (no photo yet)
+      await updateProfile(result.user, {
+        displayName: formData.displayName
+      });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+      // Send email verification
+      await sendEmailVerification(result.user);
+      
+      setPendingUser(result.user);
+      setVerificationSent(true);
+      
+      
+      alert("Verification email sent! Please check your inbox and verify your email to continue.");
+      
+    } catch (error) {
+      console.error("Sign up error:", error);
+      alert(getErrorMessage(error.code));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Email/Password Login
   const handleEmailLogin = async (e) => {
@@ -267,11 +291,11 @@ const handleEmailSignUp = async (e) => {
       }
 
       console.log('User authentication successful:', data.message);
-      router.push("/dashboard");
+      return data;
       
     } catch (error) {
       console.error("User creation error:", error);
-      alert(error.message || "Failed to create user profile");
+      throw error;
     }
   };
 
@@ -302,6 +326,8 @@ const handleEmailSignUp = async (e) => {
     setImagePreview(null);
     setVerificationSent(false);
     setPendingUser(null);
+    setShowPhotoUpload(false);
+    setVerifiedUser(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -310,16 +336,147 @@ const handleEmailSignUp = async (e) => {
   return (
     <div style={{ width: 400, margin: "50px auto", padding: "20px" }}>
       <h2 style={{ textAlign: "center", marginBottom: "30px" }}>
-        {showForgotPassword 
-          ? "Reset Password" 
-          : verificationSent 
-            ? "Verify Your Email" 
-            : (isLogin ? "Login" : "Sign Up")
+        {showPhotoUpload 
+          ? "Complete Your Profile" 
+          : showForgotPassword 
+            ? "Reset Password" 
+            : verificationSent 
+              ? "Verify Your Email" 
+              : (isLogin ? "Login" : "Sign Up")
         }
       </h2>
 
+      {/* Photo Upload After Verification */}
+      {showPhotoUpload && (
+        <div style={{ textAlign: "center" }}>
+          <div style={{ 
+            backgroundColor: "#e8f5e8", 
+            padding: "20px", 
+            borderRadius: "8px",
+            marginBottom: "20px"
+          }}>
+            <h3 style={{ color: "#2e7d32", marginBottom: "10px" }}>
+              Email Verified Successfully! 🎉
+            </h3>
+            <p style={{ marginBottom: "15px", color: "#555" }}>
+              Welcome <strong>{verifiedUser?.displayName || verifiedUser?.email}</strong>
+            </p>
+            <p style={{ color: "#666", fontSize: "14px" }}>
+              Complete your profile by adding a photo (optional)
+            </p>
+          </div>
+
+          {/* Profile Photo Upload */}
+          <div style={{ 
+            textAlign: "center", 
+            marginBottom: "20px",
+            position: "relative",
+            display: "inline-block",
+            width: "100%"
+          }}>
+            <div style={{
+              width: "120px",
+              height: "120px",
+              borderRadius: "50%",
+              border: "2px dashed #ddd",
+              margin: "0 auto 15px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+              backgroundColor: "#f9f9f9",
+              cursor: "pointer"
+            }}
+            onClick={() => fileInputRef.current?.click()}
+            >
+              {imagePreview ? (
+                <img 
+                  src={imagePreview} 
+                  alt="Profile preview" 
+                  style={{ 
+                    width: "100%", 
+                    height: "100%", 
+                    objectFit: "cover" 
+                  }} 
+                />
+              ) : (
+                <div style={{ textAlign: "center", color: "#666" }}>
+                  <div style={{ fontSize: "24px" }}>📷</div>
+                  <div style={{ fontSize: "12px", marginTop: "5px" }}>Add Photo</div>
+                </div>
+              )}
+            </div>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleImageSelect}
+              accept="image/*"
+              style={{ display: "none" }}
+            />
+
+            {imagePreview && (
+              <button
+                type="button"
+                onClick={removeSelectedImage}
+                style={{
+                  padding: "5px 10px",
+                  backgroundColor: "#ff4444",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  marginBottom: "10px"
+                }}
+              >
+                Remove Photo
+              </button>
+            )}
+
+            <div style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
+              Click to upload profile photo (max 5MB)
+            </div>
+          </div>
+
+          <button
+            onClick={handlePhotoUploadAfterVerification}
+            style={{
+              width: "100%",
+              padding: "12px",
+              backgroundColor: loading ? "#ccc" : "#1976d2",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              fontSize: "16px",
+              cursor: loading ? "not-allowed" : "pointer",
+              marginBottom: "10px"
+            }}
+            disabled={loading}
+          >
+            {loading ? "Setting up..." : "Complete Profile"}
+          </button>
+          
+          <button
+            onClick={handleSkipPhotoUpload}
+            style={{
+              width: "100%",
+              padding: "10px",
+              backgroundColor: "transparent",
+              color: "#1976d2",
+              border: "1px solid #1976d2",
+              borderRadius: "4px",
+              cursor: loading ? "not-allowed" : "pointer"
+            }}
+            disabled={loading}
+          >
+            Skip for now
+          </button>
+        </div>
+      )}
+
       {/* Verification Sent Screen */}
-      {verificationSent && (
+      {verificationSent && !showPhotoUpload && (
         <div style={{ textAlign: "center" }}>
           <div style={{ 
             backgroundColor: "#e8f5e8", 
@@ -334,7 +491,7 @@ const handleEmailSignUp = async (e) => {
               We've sent a verification link to <strong>{formData.email}</strong>
             </p>
             <p style={{ color: "#666", fontSize: "14px" }}>
-              Please click the link in the email to verify your account before logging in.
+              Please click the link in the email to verify your account. After verification, you'll be able to add a profile photo and complete your setup.
             </p>
           </div>
           
@@ -376,146 +533,99 @@ const handleEmailSignUp = async (e) => {
         </div>
       )}
 
-      {/* Forgot Password Form */}
-      {showForgotPassword && !verificationSent ? (
-        <form onSubmit={handleForgotPassword}>
-          <div style={{ marginBottom: "15px" }}>
-            <input
-              type="email"
-              name="email"
-              placeholder="Enter your email"
-              value={formData.email}
-              onChange={handleInputChange}
-              style={{
-                width: "100%",
-                padding: "12px",
-                border: "1px solid #ddd",
-                borderRadius: "4px",
-                fontSize: "16px"
-              }}
-              required
-            />
-          </div>
-          
-          <button
-            type="submit"
-            style={{
-              width: "100%",
-              padding: "12px",
-              backgroundColor: loading ? "#ccc" : "#007bff",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              fontSize: "16px",
-              cursor: loading ? "not-allowed" : "pointer",
-              marginBottom: "15px"
-            }}
-            disabled={loading}
-          >
-            {loading ? "Sending..." : "Send Reset Link"}
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => setShowForgotPassword(false)}
-            style={{
-              width: "100%",
-              padding: "10px",
-              backgroundColor: "transparent",
-              color: "#007bff",
-              border: "1px solid #007bff",
-              borderRadius: "4px",
-              cursor: "pointer"
-            }}
-          >
-            Back to Login
-          </button>
-        </form>
-      ) : !verificationSent && (
+      {/* Rest of the forms (Forgot Password, Login, Signup) */}
+      {/* ... (Keep the existing form code for forgot password, login, and signup as you had) */}
+      {!showPhotoUpload && !verificationSent && (
         <>
-          {/* Email/Password Form */}
-          <form onSubmit={isLogin ? handleEmailLogin : handleEmailSignUp}>
-            {!isLogin && (
-              <>
-                {/* Profile Photo Upload */}
-                <div style={{ 
-                  textAlign: "center", 
-                  marginBottom: "20px",
-                  position: "relative",
-                  display: "inline-block",
-                  width: "100%"
-                }}>
-                  <div style={{
-                    width: "100px",
-                    height: "100px",
-                    borderRadius: "50%",
-                    border: "2px dashed #ddd",
-                    margin: "0 auto 15px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    overflow: "hidden",
-                    backgroundColor: "#f9f9f9",
-                    cursor: "pointer"
+          {/* Forgot Password Form */}
+          {showForgotPassword ? (
+            <form onSubmit={handleForgotPassword}>
+              <div style={{ marginBottom: "15px" }}>
+                <input
+                  type="email"
+                  name="email"
+                  placeholder="Enter your email"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  style={{
+                    width: "100%",
+                    padding: "12px",
+                    border: "1px solid #ddd",
+                    borderRadius: "4px",
+                    fontSize: "16px"
                   }}
-                  onClick={() => fileInputRef.current?.click()}
-                  >
-                    {imagePreview ? (
-                      <img 
-                        src={imagePreview} 
-                        alt="Profile preview" 
-                        style={{ 
-                          width: "100%", 
-                          height: "100%", 
-                          objectFit: "cover" 
-                        }} 
+                  required
+                />
+              </div>
+              
+              <button
+                type="submit"
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: loading ? "#ccc" : "#007bff",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "16px",
+                  cursor: loading ? "not-allowed" : "pointer",
+                  marginBottom: "15px"
+                }}
+                disabled={loading}
+              >
+                {loading ? "Sending..." : "Send Reset Link"}
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(false)}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  backgroundColor: "transparent",
+                  color: "#007bff",
+                  border: "1px solid #007bff",
+                  borderRadius: "4px",
+                  cursor: "pointer"
+                }}
+              >
+                Back to Login
+              </button>
+            </form>
+          ) : (
+            <>
+              {/* Email/Password Form */}
+              <form onSubmit={isLogin ? handleEmailLogin : handleEmailSignUp}>
+                {!isLogin && (
+                  <>
+                    {/* Display Name */}
+                    <div style={{ marginBottom: "15px" }}>
+                      <input
+                        type="text"
+                        name="displayName"
+                        placeholder="Full Name"
+                        value={formData.displayName}
+                        onChange={handleInputChange}
+                        style={{
+                          width: "100%",
+                          padding: "12px",
+                          border: "1px solid #ddd",
+                          borderRadius: "4px",
+                          fontSize: "16px",
+                          marginBottom: "15px"
+                        }}
+                        required
                       />
-                    ) : (
-                      <div style={{ textAlign: "center", color: "#666" }}>
-                        <div>📷</div>
-                        <div style={{ fontSize: "12px", marginTop: "5px" }}>Add Photo</div>
-                      </div>
-                    )}
-                  </div>
-
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleImageSelect}
-                    accept="image/*"
-                    style={{ display: "none" }}
-                  />
-
-                  {imagePreview && (
-                    <button
-                      type="button"
-                      onClick={removeSelectedImage}
-                      style={{
-                        padding: "5px 10px",
-                        backgroundColor: "#ff4444",
-                        color: "white",
-                        border: "none",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        cursor: "pointer"
-                      }}
-                    >
-                      Remove
-                    </button>
-                  )}
-
-                  <div style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
-                    Click to upload profile photo (max 5MB)
-                  </div>
-                </div>
-
-                {/* Display Name */}
+                    </div>
+                  </>
+                )}
+                
                 <div style={{ marginBottom: "15px" }}>
                   <input
-                    type="text"
-                    name="displayName"
-                    placeholder="Full Name"
-                    value={formData.displayName}
+                    type="email"
+                    name="email"
+                    placeholder="Email address"
+                    value={formData.email}
                     onChange={handleInputChange}
                     style={{
                       width: "100%",
@@ -527,153 +637,134 @@ const handleEmailSignUp = async (e) => {
                     }}
                     required
                   />
+                  
+                  <input
+                    type="password"
+                    name="password"
+                    placeholder="Password"
+                    value={formData.password}
+                    onChange={handleInputChange}
+                    style={{
+                      width: "100%",
+                      padding: "12px",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      fontSize: "16px",
+                      marginBottom: isLogin ? "15px" : "15px"
+                    }}
+                    required
+                  />
+                  
+                  {!isLogin && (
+                    <input
+                      type="password"
+                      name="confirmPassword"
+                      placeholder="Confirm Password"
+                      value={formData.confirmPassword}
+                      onChange={handleInputChange}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #ddd",
+                        borderRadius: "4px",
+                        fontSize: "16px",
+                        marginBottom: "15px"
+                      }}
+                      required
+                    />
+                  )}
                 </div>
-              </>
-            )}
-            
-            <div style={{ marginBottom: "15px" }}>
-              <input
-                type="email"
-                name="email"
-                placeholder="Email address"
-                value={formData.email}
-                onChange={handleInputChange}
-                style={{
-                  width: "100%",
-                  padding: "12px",
-                  border: "1px solid #ddd",
-                  borderRadius: "4px",
-                  fontSize: "16px",
-                  marginBottom: "15px"
-                }}
-                required
-              />
-              
-              <input
-                type="password"
-                name="password"
-                placeholder="Password"
-                value={formData.password}
-                onChange={handleInputChange}
-                style={{
-                  width: "100%",
-                  padding: "12px",
-                  border: "1px solid #ddd",
-                  borderRadius: "4px",
-                  fontSize: "16px",
-                  marginBottom: isLogin ? "15px" : "15px"
-                }}
-                required
-              />
-              
-              {!isLogin && (
-                <input
-                  type="password"
-                  name="confirmPassword"
-                  placeholder="Confirm Password"
-                  value={formData.confirmPassword}
-                  onChange={handleInputChange}
+                
+                <button
+                  type="submit"
                   style={{
                     width: "100%",
                     padding: "12px",
-                    border: "1px solid #ddd",
+                    backgroundColor: loading ? "#ccc" : "#007bff",
+                    color: "white",
+                    border: "none",
                     borderRadius: "4px",
                     fontSize: "16px",
+                    cursor: loading ? "not-allowed" : "pointer",
                     marginBottom: "15px"
                   }}
-                  required
-                />
+                  disabled={loading}
+                >
+                  {loading ? "Please wait..." : (isLogin ? "Login" : "Sign Up")}
+                </button>
+              </form>
+
+              {/* Forgot Password Link */}
+              {isLogin && (
+                <div style={{ textAlign: "center", marginBottom: "20px" }}>
+                  <button
+                    onClick={() => setShowForgotPassword(true)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#007bff",
+                      cursor: "pointer",
+                      textDecoration: "underline"
+                    }}
+                  >
+                    Forgot your password?
+                  </button>
+                </div>
               )}
-            </div>
-            
-            <button
-              type="submit"
-              style={{
-                width: "100%",
-                padding: "12px",
-                backgroundColor: loading ? "#ccc" : "#007bff",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                fontSize: "16px",
-                cursor: loading ? "not-allowed" : "pointer",
-                marginBottom: "15px"
-              }}
-              disabled={loading}
-            >
-              {loading ? "Please wait..." : (isLogin ? "Login" : "Sign Up")}
-            </button>
-          </form>
 
-          {/* Forgot Password Link */}
-          {isLogin && (
-            <div style={{ textAlign: "center", marginBottom: "20px" }}>
+              {/* Toggle between Login and Signup */}
+              <div style={{ textAlign: "center", marginBottom: "20px" }}>
+                <button
+                  onClick={() => {
+                    setIsLogin(!isLogin);
+                    resetForm();
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#007bff",
+                    cursor: "pointer",
+                    textDecoration: "underline"
+                  }}
+                >
+                  {isLogin ? "Don't have an account? Sign up" : "Already have an account? Login"}
+                </button>
+              </div>
+
+              {/* Divider */}
+              <div style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                margin: "20px 0" 
+              }}>
+                <div style={{ flex: 1, height: "1px", backgroundColor: "#ddd" }}></div>
+                <span style={{ padding: "0 15px", color: "#666" }}>OR</span>
+                <div style={{ flex: 1, height: "1px", backgroundColor: "#ddd" }}></div>
+              </div>
+
+              {/* Google Login Button */}
               <button
-                onClick={() => setShowForgotPassword(true)}
+                onClick={handleGoogleLogin}
                 style={{
-                  background: "none",
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: loading ? "#ccc" : "#db4437",
+                  color: "white",
                   border: "none",
-                  color: "#007bff",
-                  cursor: "pointer",
-                  textDecoration: "underline"
+                  borderRadius: "4px",
+                  fontSize: "16px",
+                  cursor: loading ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "10px"
                 }}
+                disabled={loading}
               >
-                Forgot your password?
+                <span>Login with Google</span>
               </button>
-            </div>
+            </>
           )}
-
-          {/* Toggle between Login and Signup */}
-          <div style={{ textAlign: "center", marginBottom: "20px" }}>
-            <button
-              onClick={() => {
-                setIsLogin(!isLogin);
-                resetForm();
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#007bff",
-                cursor: "pointer",
-                textDecoration: "underline"
-              }}
-            >
-              {isLogin ? "Don't have an account? Sign up" : "Already have an account? Login"}
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div style={{ 
-            display: "flex", 
-            alignItems: "center", 
-            margin: "20px 0" 
-          }}>
-            <div style={{ flex: 1, height: "1px", backgroundColor: "#ddd" }}></div>
-            <span style={{ padding: "0 15px", color: "#666" }}>OR</span>
-            <div style={{ flex: 1, height: "1px", backgroundColor: "#ddd" }}></div>
-          </div>
-
-          {/* Google Login Button */}
-          <button
-            onClick={handleGoogleLogin}
-            style={{
-              width: "100%",
-              padding: "12px",
-              backgroundColor: loading ? "#ccc" : "#db4437",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              fontSize: "16px",
-              cursor: loading ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "10px"
-            }}
-            disabled={loading}
-          >
-            <span>Login with Google</span>
-          </button>
         </>
       )}
     </div>
