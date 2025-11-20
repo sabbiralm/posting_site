@@ -36,16 +36,59 @@ export default function LoginPage() {
 
   // Check auth state to detect when user verifies email
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && user.emailVerified && verifiedUser === null) {
-        // User just verified their email
-        setVerifiedUser(user);
-        setShowPhotoUpload(true);
-      }
-    });
+    let intervalId;
 
-    return () => unsubscribe();
-  }, [verifiedUser]);
+    const checkVerificationStatus = async (currentUser) => {
+        if (!currentUser || !verificationSent || showPhotoUpload) {
+            return; // Only proceed if on verification screen
+        }
+        
+        try {
+            // Force reload user data to check for external verification
+            await currentUser.reload();
+            const reloadedUser = auth.currentUser; // Get the user object with refreshed data
+
+            if (reloadedUser && reloadedUser.emailVerified) {
+                // 1. Verification successful! Clear the interval
+                clearInterval(intervalId);
+
+                // 2. Clear verification-related states
+                setPendingUser(null);
+                setVerificationSent(false);
+
+                // 3. Set the user for the next stage (photo upload)
+                setVerifiedUser(reloadedUser);
+                setShowPhotoUpload(true);
+
+                // Optional: Show a successful message
+                alert("Email verified successfully! You can now complete your profile.");
+            }
+        } catch (error) {
+            console.error("Error checking verification status:", error);
+            // Optionally handle error (e.g., if user was deleted)
+        }
+    };
+
+    // Start checking only if a verification email has been sent
+    if (verificationSent && !showPhotoUpload) {
+        // Run the check immediately on component mount/state change
+        checkVerificationStatus(auth.currentUser); 
+
+        // Set interval to check every 3 seconds
+        intervalId = setInterval(() => {
+            // Must use auth.currentUser to get the latest user instance for reload
+            checkVerificationStatus(auth.currentUser);
+        }, 3000); // Check every 3 seconds
+    }
+
+    // Clean-up function to clear the interval when the component unmounts 
+    // or dependencies (like verificationSent) change and condition is false.
+    return () => {
+        if (intervalId) {
+            clearInterval(intervalId);
+        }
+    };
+}, [verificationSent, showPhotoUpload]);
 
   const handleInputChange = (e) => {
     setFormData({

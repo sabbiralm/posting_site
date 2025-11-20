@@ -27,11 +27,19 @@ export default function Dashboard() {
   return (
     <div style={{ width: 300, margin: "80px auto" }}>
       <h2>Welcome: {user.displayName}</h2>
-      <p>Email: {user.email}</p>
-      <Image src={user.photoURL} width={60} alt={user.displayName} height={50} style={{ borderRadius: 50 }} />
-
-      <br />
-      <button onClick={() => signOut(auth)}>Logout</button>
+         <p>Email: {user.email}</p>
+         {user.photoURL && (
+            <Image 
+               src={user.photoURL} 
+               width={60} 
+               alt={user.displayName || "User Profile Picture"} 
+               height={50} 
+               style={{ borderRadius: 50 }} 
+            />
+         )}
+  
+         <br />
+         <button onClick={() => signOut(auth)}>Logout</button>
     </div>
   );
 }
