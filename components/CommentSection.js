@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import Comment from './Comment';
 import Image from 'next/image';
 
-export default function CommentSection({ postId, currentUser, onCommentCountChange }) {
+export default function CommentSection({ postId, currentUser }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
@@ -23,19 +23,15 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
       if (response.ok) {
         const data = await response.json();
         setComments(Array.isArray(data) ? data : []);
-        const count = Array.isArray(data) ? data.length : 0;
-        setTotalComments(count);
-        onCommentCountChange?.(count);
+        setTotalComments(Array.isArray(data) ? data.length : 0);
       } else {
         setComments([]);
         setTotalComments(0);
-        onCommentCountChange?.(0);
       }
     } catch (error) {
       console.error('Error fetching comments:', error);
       setComments([]);
       setTotalComments(0);
-      onCommentCountChange?.(0);
     } finally {
       setLoading(false);
     }
@@ -61,9 +57,7 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
 
     // Optimistic update
     setComments(prev => [tempComment, ...prev]);
-    const newCount = totalComments + 1;
-    setTotalComments(newCount);
-    onCommentCountChange?.(newCount);
+    setTotalComments(prev => prev + 1);
     setNewComment("");
 
     try {
@@ -93,9 +87,7 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
         setComments(prev => 
           prev.filter(comment => comment._id !== tempComment._id)
         );
-        const restoredCount = totalComments - 1;
-        setTotalComments(restoredCount);
-        onCommentCountChange?.(restoredCount);
+        setTotalComments(prev => prev - 1);
         console.error('Failed to post comment');
       }
     } catch (error) {
@@ -104,16 +96,10 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
       setComments(prev => 
         prev.filter(comment => comment._id !== tempComment._id)
       );
-      const restoredCount = totalComments - 1;
-      setTotalComments(restoredCount);
-      onCommentCountChange?.(restoredCount);
+      setTotalComments(prev => prev - 1);
     } finally {
       setIsPosting(false);
     }
-  };
-
-  const handleCommentUpdate = () => {
-    fetchComments(); // Refresh comments when a reply is added
   };
 
   if (!postId) {
@@ -122,6 +108,11 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
 
   return (
     <div className="mt-4">
+      {/* Total Comments Count */}
+      <div className="text-gray-500 text-sm mb-4 border-b border-gray-200 pb-2">
+        💬️ Total {totalComments} {totalComments === 1 ? 'comment' : 'comments'}
+      </div>
+
       {/* Comment Input */}
       <div className="flex items-start space-x-2 mb-4">
         <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
@@ -129,8 +120,8 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
             <Image
               src={currentUser?.photoURL}
               alt={currentUser?.name || 'User'}
-              height={32}
-              width={32}
+              height={40}
+              width={40}
               className="rounded-full"
             />
           ) : (
@@ -176,7 +167,7 @@ export default function CommentSection({ postId, currentUser, onCommentCountChan
                 comment={comment}
                 currentUser={currentUser}
                 postId={postId}
-                onCommentUpdate={handleCommentUpdate}
+                onCommentUpdate={fetchComments}
               />
             ))
           )}
