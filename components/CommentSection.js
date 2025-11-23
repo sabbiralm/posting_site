@@ -1,12 +1,14 @@
 'use client';
 import { useState, useEffect } from 'react';
 import Comment from './Comment';
+import Image from 'next/image';
 
-export default function CommentSection({ postId, currentUser }) {
+export default function CommentSection({ postId, currentUser, onCommentCountChange }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
+  const [totalComments, setTotalComments] = useState(0);
 
   useEffect(() => {
     if (postId) {
@@ -15,20 +17,27 @@ export default function CommentSection({ postId, currentUser }) {
   }, [postId]);
 
   const fetchComments = async () => {
-    //setLoading(true);
+    setLoading(true);
     try {
       const response = await fetch(`/api/comments?postId=${postId}`);
       if (response.ok) {
         const data = await response.json();
         setComments(Array.isArray(data) ? data : []);
+        const count = Array.isArray(data) ? data.length : 0;
+        setTotalComments(count);
+        onCommentCountChange?.(count);
       } else {
         setComments([]);
+        setTotalComments(0);
+        onCommentCountChange?.(0);
       }
     } catch (error) {
       console.error('Error fetching comments:', error);
       setComments([]);
+      setTotalComments(0);
+      onCommentCountChange?.(0);
     } finally {
-     // setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -37,7 +46,7 @@ export default function CommentSection({ postId, currentUser }) {
     if (!newComment.trim() || isPosting) return;
     
     setIsPosting(true);
-    
+
     // Create temporary comment for optimistic update
     const tempComment = {
       _id: "temp-" + Date.now(),
@@ -52,6 +61,9 @@ export default function CommentSection({ postId, currentUser }) {
 
     // Optimistic update
     setComments(prev => [tempComment, ...prev]);
+    const newCount = totalComments + 1;
+    setTotalComments(newCount);
+    onCommentCountChange?.(newCount);
     setNewComment("");
 
     try {
@@ -81,6 +93,9 @@ export default function CommentSection({ postId, currentUser }) {
         setComments(prev => 
           prev.filter(comment => comment._id !== tempComment._id)
         );
+        const restoredCount = totalComments - 1;
+        setTotalComments(restoredCount);
+        onCommentCountChange?.(restoredCount);
         console.error('Failed to post comment');
       }
     } catch (error) {
@@ -89,9 +104,16 @@ export default function CommentSection({ postId, currentUser }) {
       setComments(prev => 
         prev.filter(comment => comment._id !== tempComment._id)
       );
+      const restoredCount = totalComments - 1;
+      setTotalComments(restoredCount);
+      onCommentCountChange?.(restoredCount);
     } finally {
       setIsPosting(false);
     }
+  };
+
+  const handleCommentUpdate = () => {
+    fetchComments(); // Refresh comments when a reply is added
   };
 
   if (!postId) {
@@ -100,19 +122,22 @@ export default function CommentSection({ postId, currentUser }) {
 
   return (
     <div className="mt-4">
-      {/* Comment Count */}
-      {comments.length > 0 && (
-        <div className="text-gray-500 text-sm mb-4 border-b border-gray-200 pb-2">
-          💬️ {comments.length} comments
-        </div>
-      )}
-
       {/* Comment Input */}
       <div className="flex items-start space-x-2 mb-4">
         <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
-          <span className="text-gray-600 text-sm font-semibold">
-            {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-          </span>
+          {currentUser?.photoURL ? (
+            <Image
+              src={currentUser?.photoURL}
+              alt={currentUser?.name || 'User'}
+              height={32}
+              width={32}
+              className="rounded-full"
+            />
+          ) : (
+            <span className="text-blue-600 text-sm font-semibold">
+              {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+            </span>
+          )}
         </div>
         <form onSubmit={handleSubmitComment} className="flex-1">
           <input
@@ -151,7 +176,7 @@ export default function CommentSection({ postId, currentUser }) {
                 comment={comment}
                 currentUser={currentUser}
                 postId={postId}
-                onCommentUpdate={fetchComments}
+                onCommentUpdate={handleCommentUpdate}
               />
             ))
           )}

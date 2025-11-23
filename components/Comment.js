@@ -1,31 +1,57 @@
 'use client';
 import Image from 'next/image';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export default function Comment({ comment, currentUser, postId, onCommentUpdate, depth = 0 }) {
   const commentRef = useRef(null);
-  
-  // Safe defaults for comment data
+
   const safeLikes = comment?.likes || [];
-  const safeMentions = comment?.mentions || [];
   const safeReplies = comment?.replies || [];
-  
+
   const [isLiked, setIsLiked] = useState(safeLikes.includes(currentUser?.id));
   const [likeCount, setLikeCount] = useState(safeLikes.length);
   const [isReplying, setIsReplying] = useState(false);
   const [replyContent, setReplyContent] = useState('');
   const [isPosting, setIsPosting] = useState(false);
   const [showReplies, setShowReplies] = useState(false);
+  const [showLikeUsers, setShowLikeUsers] = useState(false);
+  const [showShareOptions, setShowShareOptions] = useState(false);
+  const [likeUsers, setLikeUsers] = useState([]);
 
-  // Flat replies after 3 levels (0, 1, 2 = nested, 3+ = flat)
   const MAX_NESTED_DEPTH = 10;
   const shouldFlattenReplies = depth >= MAX_NESTED_DEPTH;
-console.log("kjh",currentUser)
+
+  // Add @username when reply opens
+  useEffect(() => {
+    if (isReplying) {
+      const mention = `@${comment.author} `;
+      setReplyContent((prev) => (prev.startsWith(mention) ? prev : mention));
+    }
+  }, [isReplying, comment.author]);
+
+  // Fetch like users when modal opens
+  useEffect(() => {
+    if (showLikeUsers && likeCount > 0) {
+      fetchLikeUsers();
+    }
+  }, [showLikeUsers]);
+
+  const fetchLikeUsers = async () => {
+    try {
+      const response = await fetch(`/api/comments/${comment._id}/likes`);
+      if (response.ok) {
+        const data = await response.json();
+        setLikeUsers(data.likes || []);
+      }
+    } catch (error) {
+      console.error('Error fetching like users:', error);
+    }
+  };
+
   const handleLike = async () => {
     const prevLiked = isLiked;
     const prevCount = likeCount;
 
-    // Optimistic update
     if (!isLiked) {
       setIsLiked(true);
       setLikeCount(likeCount + 1);
@@ -42,11 +68,9 @@ console.log("kjh",currentUser)
       });
 
       if (!response.ok) {
-        // Server failed → rollback
         setIsLiked(prevLiked);
         setLikeCount(prevCount);
       } else {
-        // Update from server response
         const updatedComment = await response.json();
         const updatedLikes = updatedComment?.likes || [];
         setIsLiked(updatedLikes.includes(currentUser?.id));
@@ -54,7 +78,6 @@ console.log("kjh",currentUser)
       }
     } catch (error) {
       console.error('Error liking comment:', error);
-      // Network error → rollback
       setIsLiked(prevLiked);
       setLikeCount(prevCount);
     }
@@ -62,12 +85,12 @@ console.log("kjh",currentUser)
 
   const handleReply = async (e) => {
     e.preventDefault();
-    
     if (!replyContent.trim() || isPosting) return;
-    
+
     setIsPosting(true);
 
     try {
+      // Extract mentions
       const mentionRegex = /@(\w+)/g;
       const mentions = [];
       let match;
@@ -92,9 +115,8 @@ console.log("kjh",currentUser)
       if (response.ok) {
         setReplyContent('');
         setIsReplying(false);
-        setShowReplies(true); // Show replies after posting
-        
-        onCommentUpdate(); // Refresh comments
+        setShowReplies(true);
+        onCommentUpdate();
       } else {
         console.error('Error posting reply. Server responded with:', response.status);
       }
@@ -105,113 +127,201 @@ console.log("kjh",currentUser)
     }
   };
 
-  // If comment is not available, don't render
-  if (!comment) {
-    return null;
-  }
+  const handleShare = async (platform) => {
+    const commentText = `${comment.content} - By ${comment.author}`;
+    const shareUrl = `${window.location.origin}/posts/${postId}#comment-${comment._id}`;
+    
+    let shareLink = '';
+    
+    switch (platform) {
+      case 'facebook':
+        shareLink = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
+        break;
+      case 'twitter':
+        shareLink = `https://twitter.com/intent/tweet?text=${encodeURIComponent(commentText)}&url=${encodeURIComponent(shareUrl)}`;
+        break;
+      case 'linkedin':
+        shareLink = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`;
+        break;
+      case 'copy':
+        await navigator.clipboard.writeText(shareUrl);
+        alert('Link copied to clipboard!');
+        setShowShareOptions(false);
+        return;
+      default:
+        return;
+    }
+    
+    window.open(shareLink, '_blank', 'width=600,height=400');
+    setShowShareOptions(false);
+  };
+
+  if (!comment) return null;
 
   return (
-    <div 
-  ref={commentRef}
-  className={`${depth > 0 ? 'mt-2' : 'mt-3'}`}
-  onClick={(e) => {
-    e.stopPropagation();   // 🔥 Prevent bubbling
-    console.log("Depth:", depth);
-  }}
->
-
-      <div  className={depth >= 2 ? '' : 'flex items-start'}>
-        {/* Profile Picture */}
+    <div ref={commentRef} className={`${depth > 0 ? 'mt-2' : 'mt-3'}`} onClick={(e) => e.stopPropagation()}>
+      <div className={depth >= 2 ? '' : 'flex items-start'}>
+        {/* Profile */}
         <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
-          <span className="text-blue-600 text-sm font-semibold">
-            {comment.photoURL ? (
-  <Image
-    src={comment.photoURL}
-    alt={comment.author}
-    height={40}
-    width={40}
-    className="rounded-full"
-  />
-) : (
-  <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center text-sm font-bold">
-    {comment.author?.charAt(0).toUpperCase() || 'U'}
-  </div>
-)}
-
-          </span>
+          {comment.photoURL ? (
+            <Image src={comment.photoURL} alt={comment.author} height={40} width={40} className="rounded-full" />
+          ) : (
+            <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center text-sm font-bold">
+              {comment.author?.charAt(0).toUpperCase() || 'U'}
+            </div>
+          )}
         </div>
-        
+
         <div className="flex-1 mt-2">
           {/* Comment Content */}
           <div className="bg-gray-100 rounded-2xl px-3 py-2">
             <div className="flex items-baseline space-x-2">
-              <h4 className="font-semibold text-sm text-gray-900">
-                {comment.author || 'Unknown User'}
-              </h4>
+              <h4 className="font-semibold text-sm text-gray-900">{comment.author || 'Unknown User'}</h4>
               <span className="text-gray-500 text-xs">
-                {comment.createdAt ? new Date(comment.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Now'}
+                {comment.createdAt ? new Date(comment.createdAt).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit' }) : 'Now'}
               </span>
             </div>
-            <p className="text-gray-800 mt-1 text-sm">
-              {comment.content}
-            </p>
+            <p className="text-gray-800 mt-1 text-sm">{comment.content}</p>
           </div>
 
-          {/* Comment Actions */}
+          {/* Actions */}
           <div className="flex items-center space-x-4 mt-1 text-xs text-gray-500 px-1">
-            <button
-              onClick={handleLike}
+            {/* Like Button */}
+            <button 
+              onClick={handleLike} 
               className={`hover:underline ${isLiked ? 'text-blue-600 font-semibold' : ''}`}
             >
               Like
             </button>
             
-            <button
-              type="button"
-              onClick={() => setIsReplying(!isReplying)}
-              className="hover:underline"
+            {/* Reply Button */}
+            <button 
+              type="button" 
+              onClick={() => setIsReplying(!isReplying)} 
+              className="hover:underline" 
               disabled={isPosting}
             >
               Reply
             </button>
-            
-            {likeCount > 0 && (
-              <span className="text-gray-400">·</span>
-            )}
-            
-            {likeCount > 0 && (
-              <button className="flex items-center space-x-1 text-gray-500 hover:underline">
-                <span>👍</span>
-                <span>{likeCount}</span>
+
+            {/* Share Button */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowShareOptions(!showShareOptions)}
+                className="hover:underline"
+              >
+                Share
               </button>
+              
+              {/* Share Options Dropdown */}
+              {showShareOptions && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-32">
+                  <button 
+                    onClick={() => handleShare('facebook')}
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
+                  >
+                    Facebook
+                  </button>
+                  <button 
+                    onClick={() => handleShare('twitter')}
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
+                  >
+                    Twitter
+                  </button>
+                  <button 
+                    onClick={() => handleShare('linkedin')}
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
+                  >
+                    LinkedIn
+                  </button>
+                  <button 
+                    onClick={() => handleShare('copy')}
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-t border-gray-200"
+                  >
+                    Copy Link
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Like Count */}
+            {likeCount > 0 && (
+              <>
+                <span className="text-gray-400">·</span>
+                <button 
+                  onClick={() => setShowLikeUsers(true)}
+                  className="flex items-center space-x-1 text-gray-500 hover:underline"
+                >
+                  <span>👍</span>
+                  <span>{likeCount}</span>
+                </button>
+              </>
             )}
 
+            {/* View Replies */}
             {safeReplies.length > 0 && (
               <>
                 <span className="text-gray-400">·</span>
                 <button 
-                  onClick={() => setShowReplies(!showReplies)}
+                  onClick={() => setShowReplies(!showReplies)} 
                   className="text-blue-600 hover:underline"
                 >
                   {showReplies ? 'Hide' : 'View'} replies ({safeReplies.length})
                 </button>
               </>
             )}
-            
-            {isPosting && (
-              <span className="text-green-600 text-xs">
-                Posting...
-              </span>
-            )}
           </div>
+
+          {/* Like Users Modal */}
+          {showLikeUsers && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-semibold text-lg">Liked by</h3>
+                  <button 
+                    onClick={() => setShowLikeUsers(false)}
+                    className="text-gray-500 hover:text-gray-700"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  {likeUsers.length > 0 ? (
+                    likeUsers.map((user, index) => (
+                      <div key={index} className="flex items-center space-x-3 py-2 border-b border-gray-100">
+                        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                          {user.photoURL ? (
+                            <Image 
+                              src={user.photoURL} 
+                              alt={user.name} 
+                              width={32} 
+                              height={32} 
+                              className="rounded-full"
+                            />
+                          ) : (
+                            <span className="text-blue-600 text-sm font-semibold">
+                              {user.name?.charAt(0).toUpperCase() || 'U'}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-sm font-medium">{user.name}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center text-gray-500 py-4">
+                      No likes yet
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Reply Form */}
           {isReplying && (
             <div className="mt-2 flex items-start space-x-2">
               <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-gray-600 text-xs">
-                  {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-                </span>
+                {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
               </div>
               <form onSubmit={handleReply} className="flex-1 flex space-x-2">
                 <input
@@ -223,8 +333,8 @@ console.log("kjh",currentUser)
                   disabled={isPosting}
                   autoFocus
                 />
-                <button
-                  type="submit"
+                <button 
+                  type="submit" 
                   className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
                   disabled={isPosting || !replyContent.trim()}
                 >
@@ -236,9 +346,7 @@ console.log("kjh",currentUser)
 
           {/* Nested Replies */}
           {showReplies && safeReplies.length > 0 && (
-            <div
-    className={`mt-2 space-y-2 ${depth >= 2 ? '' : 'border-l-2 border-gray-200 pl-3'}`}
-  >
+            <div className={`mt-2 space-y-2 ${depth >= 2 ? '' : 'border-l-2  border-gray-200 pl-3'}`}>
               {safeReplies.map((reply) => (
                 <Comment
                   key={reply._id}

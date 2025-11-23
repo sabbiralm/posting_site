@@ -680,31 +680,7 @@ export default function ProfilePage() {
                 </div>
 
                 {/* Notification Settings */}
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Notification Settings</h3>
-                  <div className="space-y-3">
-                    <label className="flex items-center">
-                      <input
-                        type="checkbox"
-                        name="emailNotifications"
-                        checked={profileData.emailNotifications}
-                        onChange={handleProfileChange}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="ml-2 text-sm text-gray-700">Email notifications</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="checkbox"
-                        name="smsNotifications"
-                        checked={profileData.smsNotifications}
-                        onChange={handleProfileChange}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="ml-2 text-sm text-gray-700">SMS notifications</span>
-                    </label>
-                  </div>
-                </div>
+                
 
                 {/* Save Button */}
                 <div className="flex justify-end pt-6 border-t border-gray-200">
